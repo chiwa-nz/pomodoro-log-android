@@ -191,37 +191,35 @@ fun Timer(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
     ) {
-        AnimatedContent(
-            targetState = state.doAnimation,
-            transitionSpec = {
-                (slideInHorizontally { width -> width } + fadeIn() togetherWith
-                        slideOutHorizontally { width -> -width } + fadeOut())
-                    .using(SizeTransform(clip = false))
-            },
-            label = "animated content",
+        Box (
+            contentAlignment = Alignment.Center,
             modifier = Modifier
-                .align(Alignment.CenterHorizontally)
+                .padding(bottom = 16.dp)
         ) {
-            Box (
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .padding(bottom = 8.dp)
-            ) {
-                val image = painterResource(R.drawable.tomato)
-                val progressColour =
-                    if (progress >= 1) Color.Green
-                    else Color.Red
-                CircularProgressIndicator(
-                    progress = { progress.toFloat() },
+            val image = painterResource(R.drawable.tomato)
+            val progressColour =
+                if (progress >= 1) Color.Green
+                else Color.Red
+            CircularProgressIndicator(
+                progress = { progress.toFloat() },
 //                progress = { 1.toFloat() },
-                    color = progressColour,
-                    trackColor = Color.Transparent,
-                    strokeWidth = 18.dp,
-                    modifier = Modifier
-                        .width(128.dp)
-                        .padding(bottom = 76.dp)
+                color = progressColour,
+                trackColor = Color.Transparent,
+                strokeWidth = 18.dp,
+                modifier = Modifier
+                    .width(128.dp)
+                    .padding(bottom = 76.dp)
 //                    .padding(bottom = 88.dp)
-                )
+            )
+            AnimatedContent(
+                targetState = state.doAnimation,
+                transitionSpec = {
+                    (slideInHorizontally { width -> width } + fadeIn() togetherWith
+                            slideOutHorizontally { width -> -width } + fadeOut())
+                        .using(SizeTransform(clip = false))
+                },
+                label = "animated content"
+            ) {
                 Image(
                     painter = image,
                     contentDescription = "tomato",
