@@ -148,8 +148,7 @@ fun PomodoroApp(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    context = context,
-                    pm = pm,
+                    context = context
                 )
             }
         }

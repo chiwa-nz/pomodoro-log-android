@@ -3,14 +3,12 @@ package com.example.pomodorolog
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
-import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
@@ -43,26 +41,14 @@ import com.toggl.komposable.architecture.Reducer
 import com.toggl.komposable.extensions.withoutEffect
 import java.util.UUID
 
+const val logTag = "Bluetooth"
 
 sealed class BluetoothAction {
-    data class BluetoothInitialised(
-        val manager: BluetoothManager? = null,
-        val adapter: BluetoothAdapter? = null,
-        val scanner: BluetoothLeScanner? = null,
-    ) : BluetoothAction()
-    data class BluetoothDebugMessaged(
-        val message: String
-    ) : BluetoothAction()
-    data class ActivityCreated(
-        val activity: Activity
-    ) : BluetoothAction()
-    data class DeviceScanned(
-        val name: String?,
-        val mac: String?
-    ) : BluetoothAction()
-    data class DeviceConnected(
-        val device: Device
-    ) : BluetoothAction()
+    data class BluetoothInitialised(val manager: BluetoothManager? = null) : BluetoothAction()
+    data class BluetoothDebugMessaged(val message: String) : BluetoothAction()
+    data class ActivityCreated(val activity: Activity) : BluetoothAction()
+    data class DeviceScanned(val name: String?, val mac: String?) : BluetoothAction()
+    data class DeviceConnected(val device: Device) : BluetoothAction()
     data object DeviceDisconnected : BluetoothAction()
     data object DevicesRandomised : BluetoothAction()
     data object DevicesReset : BluetoothAction()
@@ -77,8 +63,6 @@ data class Device (
 
 data class BluetoothState(
     val manager: BluetoothManager? = null,
-    val adapter: BluetoothAdapter? = null,
-    val scanner: BluetoothLeScanner? = null,
     val devices: List<Device> = listOf(),
     val connectedDevice: Device? = null,
     val message: String = "",
@@ -86,32 +70,22 @@ data class BluetoothState(
     val namedOnly: Boolean = true
 )
 
-fun getRandomString(length: Int) : String {
-    val allowedChars = ('A'..'Z') + ('a'..'z') + ('0'..'9')
-    return (1..length)
-        .map { allowedChars.random() }
-        .joinToString("")
-}
-
-fun getRandomDevice(
-    nameLength: Int = 10,
-    macLength: Int = 10
-) : Device {
-    return Device(
-        name = getRandomString(nameLength),
-        mac = getRandomString(macLength),
-    )
-}
-
 fun generateRandomDevices(
     count: Int = 10,
     nameLength: Int = 10,
     macLength: Int = 10
 ) : List<Device> {
-    val devices = mutableListOf<Device>()
-    repeat (count) {
-        devices.add(getRandomDevice(nameLength, macLength))
+    fun getRandomString(length: Int) : String {
+        val allowedChars = ('A'..'Z') + ('a'..'z') + ('0'..'9')
+        return (1..length).map { allowedChars.random() }.joinToString("")
     }
+
+    fun getRandomDevice(nameLength: Int = 10, macLength: Int = 10) : Device {
+        return Device(getRandomString(nameLength), getRandomString(macLength))
+    }
+
+    val devices = mutableListOf<Device>()
+    repeat (count) { devices.add(getRandomDevice(nameLength, macLength)) }
     return devices.toList()
 }
 
@@ -122,11 +96,7 @@ class BluetoothReducer : Reducer<BluetoothState, BluetoothAction> {
                 state.copy(devices = generateRandomDevices()).withoutEffect()
             }
             is BluetoothAction.BluetoothInitialised ->
-                state.copy(
-                    manager = action.manager,
-                    adapter = action.adapter,
-                    scanner = action.scanner,
-                ).withoutEffect()
+                state.copy(manager = action.manager).withoutEffect()
             is BluetoothAction.BluetoothDebugMessaged ->
                 state.copy(message = action.message).withoutEffect()
             is BluetoothAction.ActivityCreated ->
@@ -155,82 +125,47 @@ class BluetoothReducer : Reducer<BluetoothState, BluetoothAction> {
         }
 }
 
-fun checkBlePermissionGranted(
-    activity: Activity?
-) : Boolean{
+fun checkBluetoothPermissions(activity: Activity?) : Boolean {
     if(activity == null) return false
 
-    val requestPermissions = mutableListOf<String>()
-
-    if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S){
-        if(ContextCompat.checkSelfPermission(activity, Manifest.permission.BLUETOOTH_SCAN)!= PackageManager.PERMISSION_GRANTED){
-            requestPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+    fun getRequiredPermissions(
+        permissionsToCheck: List<String>
+    ): MutableList<String> {
+        val requiredPermissions = mutableListOf<String>()
+        permissionsToCheck.forEach {
+            if (ContextCompat.checkSelfPermission(activity, it) !=
+                PackageManager.PERMISSION_GRANTED) requiredPermissions.add(it)
         }
-        if(ContextCompat.checkSelfPermission(activity, Manifest.permission.BLUETOOTH_CONNECT)!= PackageManager.PERMISSION_GRANTED){
-            requestPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-        }
+        return requiredPermissions
     }
 
-    if(ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED){
-        requestPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-    }
-
-    if(requestPermissions.isNotEmpty()){
-        ActivityCompat.requestPermissions(activity, requestPermissions.toTypedArray(), 1)
-        return false
-    }
-
-    return true
+    val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) permissions += listOf(
+        Manifest.permission.BLUETOOTH_SCAN,
+        Manifest.permission.BLUETOOTH_CONNECT
+    )
+    val requiredPermissions = getRequiredPermissions(permissions.toList())
+    if(requiredPermissions.isEmpty()) return true
+    ActivityCompat.requestPermissions(activity, requiredPermissions.toTypedArray(), 1)
+    return false
 }
 
-
-const val logTag = "Bluetooth"
-
 fun debugMessage(message: String) {
-    bluetoothStore.send(
-        BluetoothAction.BluetoothDebugMessaged(
-            message = message
-        )
-    )
+    bluetoothStore.send(BluetoothAction.BluetoothDebugMessaged(message))
 }
 
 fun initBluetooth(
-    context: Context? = null,
-    pm: PackageManager? = null
+    state: BluetoothState,
+    context: Context? = null
 ) {
-    Log.d(logTag, "scanBluetooth() called")
     if (context == null) {
         Log.d(logTag, "context is null, cancelling")
         return
     }
-    val bluetoothManager: BluetoothManager =
-        context.getSystemService(BluetoothManager::class.java)
-    val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-    val bluetoothLeScanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
-    if (bluetoothAdapter == null) {
-        Log.d(logTag, "Failed to enable Bluetooth.")
-        return
-    }
-    Log.d(logTag, "Bluetooth enabled successfully.")
-
-    bluetoothStore.send(
-        BluetoothAction.BluetoothInitialised(
-            manager = bluetoothManager,
-            adapter = bluetoothAdapter,
-            scanner = bluetoothLeScanner,
-        )
-    )
-
-    Log.d(logTag, "Bluetooth initialised successfully.")
+    if (state.manager != null) return debugMessage("Bluetooth already initialised.")
+    val bluetoothManager: BluetoothManager = context.getSystemService(BluetoothManager::class.java)
+    bluetoothStore.send(BluetoothAction.BluetoothInitialised(bluetoothManager))
     debugMessage("Bluetooth initialised successfully.")
-
-    if (pm != null) {
-        val bluetoothAvailable = pm.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH)
-        Log.d(logTag, "Bluetooth availability: $bluetoothAvailable.")
-
-        val bluetoothLEAvailable = pm.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
-        Log.d(logTag, "BLE availability: $bluetoothLEAvailable.")
-    }
 }
 
 private val scanCallback = object : ScanCallback() {
@@ -238,16 +173,10 @@ private val scanCallback = object : ScanCallback() {
     override fun onScanResult(callbackType: Int, result: ScanResult?) {
         super.onScanResult(callbackType, result)
 
-//        Log.d(logTag, "onScanResult() called, result = $result")
+        if (result == null) return
 
-        if (result == null){
-            return
-        }
-
-        val parcelUuids = result.scanRecord?.serviceUuids;
-        parcelUuids?.forEach {
-            Log.d(logTag, "onScanResult() ${result.device.name} ${it.uuid}")
-        }
+        val parcelUuids = result.scanRecord?.serviceUuids
+        parcelUuids?.forEach { Log.d(logTag, "onScanResult() ${result.device.name} ${it.uuid}") }
 
         bluetoothStore.send(BluetoothAction.DeviceScanned(
             name = result.device.name,
@@ -268,23 +197,20 @@ private val scanCallback = object : ScanCallback() {
 fun scanDevices(
     state: BluetoothState,
     context: Context? = null,
-    scanPeriod: Long = 1000,
+    scanPeriod: Long = 5000,
 ) {
     if (context == null) return
-    if (state.manager == null || state.scanner == null ) {
+    if (state.manager == null) {
         debugMessage("Failed to scan - Bluetooth not initialised.")
         return
     }
-    val handler = Handler(Looper.getMainLooper())
     debugMessage("Scanning for devices...")
-
-    fun stopScan() {
-        state.scanner.stopScan(scanCallback)
-    }
-
-    state.scanner.startScan(scanCallback)
-    // stops scanning after scanPeriod millis
-    handler.postDelayed({ stopScan() }, scanPeriod)
+    val scanner = state.manager.adapter.bluetoothLeScanner
+    scanner.startScan(scanCallback)
+    Handler(Looper.getMainLooper()).postDelayed({
+        debugMessage("Scanning complete.")
+        scanner.stopScan(scanCallback)
+    }, scanPeriod)
 }
 
 private val gattCallback = object : BluetoothGattCallback() {
@@ -306,12 +232,13 @@ private val gattCallback = object : BluetoothGattCallback() {
             }
             BluetoothProfile.STATE_DISCONNECTED -> {
                 bluetoothStore.send(BluetoothAction.DeviceDisconnected)
+                debugMessage("Successfully disconnected from ${device.name}")
             }
             BluetoothProfile.STATE_CONNECTING -> {
-                TODO()
+                debugMessage("Connecting to ${device.name}")
             }
             BluetoothProfile.STATE_DISCONNECTING -> {
-                TODO()
+                debugMessage("Disconnecting from ${device.name}")
             }
             else -> {
                 TODO()
@@ -323,36 +250,19 @@ private val gattCallback = object : BluetoothGattCallback() {
     override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
         super.onServicesDiscovered(gatt, status)
 
-        val bentoUuid = "0000180f-0000-1000-8000-00805f9b34fb"
-        val uuids = arrayOf(
-            "0000ffa8-0000-1000-8000-00805f9b34fb",
-            "0000FFE1-0000-1000-8000-00805F9B34FB",
-            "b128cc10-e5fb-42ec-aebc-3d6673fbfb01",
-            "00002ce1-0000-1000-8000-00805f9b34fb",
-            "b283dc64-04fd-11ee-be56-0242ac120002",
-            "EF01CDAA-D46E-D46E-0128-1616D66ED46E",
-            "0000fef1-0000-1000-8000-00805f9b34fb"
-        )
-        Log.d(logTag, "onServicesDiscovered() 1, ${gatt?.services}, $bentoUuid")
+        val bentoUUID = "00001ae1-0000-1000-8000-00805f9b34fb"
+        val characteristicUUID = "00002ce1-0000-1000-8000-00805f9b34fb"
 
-        if (status == BluetoothGatt.GATT_SUCCESS && gatt != null) {
-            for (service in gatt.services) {
-                val serviceUUID = service.uuid.toString()
-                Log.d(logTag, "onServicesDiscovered() 2, $serviceUUID, $bentoUuid")
-                if (serviceUUID == bentoUuid) {
-                    Log.d(logTag, "onServicesDiscovered() 3")
-                    for (characteristicUUID in uuids){
-                        Log.d(logTag, "onServicesDiscovered() 4 $characteristicUUID")
-                        val characteristic = service.getCharacteristic(UUID.fromString(characteristicUUID))
-                        if (characteristic != null) {
-                            Log.d(logTag, "onServicesDiscovered() 5 $characteristicUUID")
-                            gatt.setCharacteristicNotification(characteristic, true)
-                        }
-                    }
-                }
-            }
-        } else {
-            Log.d(logTag, "hi")
+        if (status != BluetoothGatt.GATT_SUCCESS || gatt == null) return
+
+        for (service in gatt.services) {
+            val serviceUUID = service.uuid.toString()
+            if (serviceUUID != bentoUUID) continue
+
+            val characteristic = service.getCharacteristic(UUID.fromString(characteristicUUID))
+            if (characteristic == null) continue
+
+            gatt.setCharacteristicNotification(characteristic, true)
         }
     }
 
@@ -361,8 +271,22 @@ private val gattCallback = object : BluetoothGattCallback() {
         characteristic: BluetoothGattCharacteristic,
         value: ByteArray
     ) {
-        Log.d(logTag, "onCharacteristicChanged() value: ${value.toString()}")
-        Log.d(logTag, "onCharacteristicChanged() characteristic: ${characteristic.toString()}")
+        if (value.contentEquals(byteArrayOf(1))) {
+            // primary button has been pressed
+            timerStore.send(TimerAction.MainButtonTapped)
+        } else if (value.contentEquals(byteArrayOf(2))) {
+            // F1 button has been pressed
+            timerStore.send(TimerAction.ResetButtonTapped)
+        } else if (value.contentEquals(byteArrayOf(4))) {
+            timerStore.send(TimerAction.LoopingToggled)
+            return
+        } else if (value.contentEquals(byteArrayOf(8))) {
+            timerStore.send(TimerAction.AnimationToggled)
+            return
+        } else if (value.contentEquals(byteArrayOf(0))) {
+            // any button has been released
+            return
+        }
     }
 }
 
@@ -370,12 +294,10 @@ private val gattCallback = object : BluetoothGattCallback() {
 fun disconnectDevice(
     state: BluetoothState
 ) {
-    debugMessage("Disconnecting from ${state.connectedDevice?.name}")
     try {
         state.connectedDevice?.gatt?.disconnect()
-        debugMessage("Successfully disconnected from ${state.connectedDevice?.name}")
     } catch (e: Exception) {
-        debugMessage("Failed to disconnect from ${state.connectedDevice?.name}")
+        debugMessage("Failed to disconnect from ${state.connectedDevice?.name}, error: $e")
     }
 }
 
@@ -388,22 +310,21 @@ fun connectToDevice(
         debugMessage("Cannot connect to specified device")
         return
     }
-    debugMessage("Connecting to ${device.name}")
     try {
-        state.adapter?.getRemoteDevice(device.mac)?.connectGatt(
+        state.manager?.adapter?.getRemoteDevice(device.mac)?.connectGatt(
             state.activity,
             true,
             gattCallback,
             BluetoothDevice.TRANSPORT_LE
         )
     } catch (e: Exception) {
-        debugMessage("Failed to connect to ${device.name}")
+        debugMessage("Failed to connect to ${device.name}, error: $e")
     }
 }
 
 @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
 @Composable
-fun BluetoothDevice(
+fun BluetoothDeviceCard(
     state: BluetoothState,
     device: Device,
     index: Int,
@@ -452,13 +373,10 @@ fun BluetoothDevice(
 fun BluetoothMain (
     state: BluetoothState,
     modifier: Modifier = Modifier,
-    context: Context? = null,
-    pm: PackageManager? = null
+    context: Context? = null
 ) {
-    if (state.activity != null) checkBlePermissionGranted(state.activity)
-    val deviceList =
-        if (state.namedOnly) state.devices.filter { it.name != "" }
-        else state.devices
+    checkBluetoothPermissions(state.activity)
+    val deviceList = state.devices.filter { it.name != if (state.namedOnly) "" else null }
     Column (
         modifier = modifier
     ){
@@ -482,37 +400,40 @@ fun BluetoothMain (
             }
         }
         Row {
-            Button(
-                onClick = { initBluetooth(
-                    context = context,
-                    pm = pm,
-                ) }
-            ) {
-                Text("Init")
-            }
-            Button(
-                modifier = Modifier.padding(start = 8.dp),
-                onClick = { scanDevices(
-                    context = context,
-                    state = state
-                ) }
-            ) {
-                Text("Scan")
-            }
-            Button(
-                modifier = Modifier.padding(start = 8.dp),
-                onClick = {
-                    state.scanner?.stopScan(scanCallback)
-                    bluetoothStore.send(BluetoothAction.DevicesReset)
+            if (state.manager == null) {
+                Button(
+                    onClick = { initBluetooth(
+                        state = state,
+                        context = context
+                    ) }
+                ) {
+                    Text("Initialise Bluetooth")
                 }
-            ) {
-                Text("Reset")
-            }
-            Button(
-                modifier = Modifier.padding(start = 8.dp),
-                onClick = { bluetoothStore.send(BluetoothAction.DevicesRandomised) }
-            ) {
-                Text("Test")
+            } else {
+                Button(
+                    modifier = Modifier.padding(start = 8.dp),
+                    onClick = { scanDevices(
+                        context = context,
+                        state = state
+                    ) }
+                ) {
+                    Text("Scan")
+                }
+                Button(
+                    modifier = Modifier.padding(start = 8.dp),
+                    onClick = {
+                        state.manager.adapter.bluetoothLeScanner?.stopScan(scanCallback)
+                        bluetoothStore.send(BluetoothAction.DevicesReset)
+                    }
+                ) {
+                    Text("Reset")
+                }
+                Button(
+                    modifier = Modifier.padding(start = 8.dp),
+                    onClick = { bluetoothStore.send(BluetoothAction.DevicesRandomised) }
+                ) {
+                    Text("Random Devices")
+                }
             }
         }
         Row (
@@ -531,7 +452,7 @@ fun BluetoothMain (
         LazyColumn(modifier = Modifier.padding(start = 6.dp)) {
             for ((index, device) in deviceList.withIndex()) {
                 item(key = device.mac) {
-                    BluetoothDevice(
+                    BluetoothDeviceCard(
                         state = state,
                         device = device,
                         index = index,
