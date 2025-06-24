@@ -7,8 +7,10 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothSocket
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
@@ -17,6 +19,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -39,7 +42,11 @@ import androidx.core.content.ContextCompat
 import com.toggl.komposable.architecture.ReduceResult
 import com.toggl.komposable.architecture.Reducer
 import com.toggl.komposable.extensions.withoutEffect
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.UUID
+
 
 const val logTag = "Bluetooth"
 
@@ -176,7 +183,7 @@ private val scanCallback = object : ScanCallback() {
         if (result == null) return
 
         val parcelUuids = result.scanRecord?.serviceUuids
-        parcelUuids?.forEach { Log.d(logTag, "onScanResult() ${result.device.name} ${it.uuid}") }
+        parcelUuids?.forEach { Log.d(logTag, "onScanResult() ${result.device.name} ${result.device.address} ${it.uuid}") }
 
         bluetoothStore.send(BluetoothAction.DeviceScanned(
             name = result.device.name,
@@ -246,24 +253,64 @@ private val gattCallback = object : BluetoothGattCallback() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @SuppressLint("MissingPermission")
     override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
         super.onServicesDiscovered(gatt, status)
 
         val bentoUUID = "00001ae1-0000-1000-8000-00805f9b34fb"
+        val ambieUUID = "5052494d-2dab-0341-6972-6f6861424c45"
         val characteristicUUID = "00002ce1-0000-1000-8000-00805f9b34fb"
+        val ambieCharacteristics = listOf(
+            "43484152-2dab-3241-6972-6f6861424c45",
+            "43484152-2dab-3141-6972-6f6861424c45",
+            "43484152-2dab-3041-6972-6f6861424c45",
+            "43484152-2dab-3641-6972-6f6861424c45"
+        )
 
         if (status != BluetoothGatt.GATT_SUCCESS || gatt == null) return
 
         for (service in gatt.services) {
             val serviceUUID = service.uuid.toString()
-            if (serviceUUID != bentoUUID) continue
-
-            val characteristic = service.getCharacteristic(UUID.fromString(characteristicUUID))
+            if (serviceUUID != bentoUUID && serviceUUID != ambieUUID) continue
+            for (characteristic in service.characteristics) {
+                Log.d(logTag, "ambie test ${characteristic.uuid} $characteristic")
+            }
+            var characteristic: BluetoothGattCharacteristic? = null
+            if (serviceUUID == ambieUUID) {
+                for (ambieCharacteristic in ambieCharacteristics) {
+                    characteristic = service.getCharacteristic(UUID.fromString(ambieCharacteristic))
+                    Log.d(logTag, "ambie characteristic ${characteristic.uuid} $characteristic")
+                }
+            } else {
+                characteristic = service.getCharacteristic(UUID.fromString(characteristicUUID))
+            }
             if (characteristic == null) continue
 
             gatt.setCharacteristicNotification(characteristic, true)
+            var ambieDescriptor: BluetoothGattDescriptor? = null
+            for (descriptor in characteristic.descriptors) {
+                Log.d(logTag, "ambie descriptors ${descriptor.uuid}")
+                ambieDescriptor = descriptor
+            }
+
+            if (ambieDescriptor == null) return
+
+            Log.d(logTag, "ambie write descriptors 0 ${characteristic.properties}")
+            var test = gatt.writeDescriptor(ambieDescriptor, BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
+            Log.d(logTag, "ambie write descriptors 1 $test")
+            gatt.writeDescriptor(ambieDescriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+            Log.d(logTag, "ambie write descriptors 2 $test")
+            gatt.setCharacteristicNotification(characteristic, true)
         }
+    }
+
+    override fun onDescriptorWrite(
+        gatt: BluetoothGatt,
+        descriptor: BluetoothGattDescriptor,
+        status: Int
+    ) {
+        Log.d(logTag, "ambie onDescriptorWrite() $gatt $descriptor $status")
     }
 
     override fun onCharacteristicChanged(
@@ -271,6 +318,8 @@ private val gattCallback = object : BluetoothGattCallback() {
         characteristic: BluetoothGattCharacteristic,
         value: ByteArray
     ) {
+        Log.d(logTag, "ambie onCharacteristicChanged() $value $characteristic")
+
         if (value.contentEquals(byteArrayOf(1))) {
             // primary button has been pressed
             timerStore.send(TimerAction.MainButtonTapped)
@@ -301,6 +350,27 @@ fun disconnectDevice(
     }
 }
 
+@Throws(IOException::class)
+fun receiveData(socket: BluetoothSocket) {
+    val socketInputStream: InputStream = socket.inputStream
+    val socketOutputStream: OutputStream = socket.outputStream
+    val buffer = ByteArray(256)
+    var bytes: Int
+    Log.d(logTag, "ambie receiveData() called")
+
+    // Keep looping to listen for received messages
+    while (true) {
+        try {
+            bytes = socketInputStream.read(buffer) //read bytes from input buffer
+            val readMessage = String(buffer, 0, bytes)
+            // Send the obtained bytes to the UI Activity via handler
+            Log.i("ambie logging", readMessage + "")
+        } catch (e: IOException) {
+            break
+        }
+    }
+}
+
 @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
 fun connectToDevice(
     state: BluetoothState,
@@ -311,12 +381,18 @@ fun connectToDevice(
         return
     }
     try {
-        state.manager?.adapter?.getRemoteDevice(device.mac)?.connectGatt(
+        val bluetoothDevice = state.manager?.adapter?.getRemoteDevice(device.mac)
+        bluetoothDevice?.connectGatt(
             state.activity,
             true,
             gattCallback,
             BluetoothDevice.TRANSPORT_LE
         )
+        Log.d(logTag, "ambie Socket Test 1")
+        val ambieUUID = UUID.fromString("5052494d-2dab-0341-6972-6f6861424c45")
+        val socket = bluetoothDevice?.createRfcommSocketToServiceRecord(ambieUUID)
+        Log.d(logTag, "ambie Socket Test 2 $socket")
+        if (socket != null) receiveData(socket)
     } catch (e: Exception) {
         debugMessage("Failed to connect to ${device.name}, error: $e")
     }
@@ -399,8 +475,8 @@ fun BluetoothMain (
                 }
             }
         }
-        Row {
-            if (state.manager == null) {
+        if (state.manager == null) {
+            Row {
                 Button(
                     onClick = { initBluetooth(
                         state = state,
@@ -409,9 +485,10 @@ fun BluetoothMain (
                 ) {
                     Text("Initialise Bluetooth")
                 }
-            } else {
+            }
+        } else {
+            Row {
                 Button(
-                    modifier = Modifier.padding(start = 8.dp),
                     onClick = { scanDevices(
                         context = context,
                         state = state
@@ -433,6 +510,35 @@ fun BluetoothMain (
                     onClick = { bluetoothStore.send(BluetoothAction.DevicesRandomised) }
                 ) {
                     Text("Random Devices")
+                }
+            }
+            Row {
+                Button(
+                    onClick = {
+                        connectToDevice(
+                            state,
+                            device = Device(
+                                name="Bento",
+                                mac=""
+                            )
+                        )
+                    }
+                ) {
+                    Text("bento")
+                }
+                Button(
+                    modifier = Modifier.padding(start = 8.dp),
+                    onClick = {
+                        connectToDevice(
+                            state,
+                            device = Device(
+                                name="ambie",
+                                mac="C8:D6:17:C9:3F:BF"
+                            )
+                        )
+                    }
+                ) {
+                    Text("ambie")
                 }
             }
         }
